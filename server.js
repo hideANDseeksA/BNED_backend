@@ -2,7 +2,7 @@ require('dotenv').config();
 
 const express = require('express');
 const { Client, Pool } = require('pg');
-const bcrypt = require("bcrypt");
+const bcrypt = require("bcryptjs");
 const cors = require('cors');
 const nodemailer = require('nodemailer');
 const cron = require('node-cron');
