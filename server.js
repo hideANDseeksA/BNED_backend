@@ -8,6 +8,10 @@ const nodemailer = require('nodemailer');
 const cron = require('node-cron');
 const crypto = require('crypto');
 const jwt = require("jsonwebtoken");
+const fs = require("fs");
+const path = require("path");
+const PizZip = require("pizzip");
+const Docxtemplater = require("docxtemplater");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -230,7 +234,7 @@ app.put("/api/update_residents", async (req, res) => {
 // ✅ Retrieve and Decrypt Residents
 app.get("/api/get_resident", async (req, res) => {
   try {
-    const result = await client.query("SELECT * FROM resident_information");
+    const result = await client.query("SELECT * FROM resident_information ORDER BY resident_id ASC");
     const decryptedData = result.rows.map(row => ({
       resident_id: row.resident_id,
       first_name: decryptData(row.first_name),
@@ -367,6 +371,7 @@ const sendEmail = async (to, subject, text,html) => {
 };
 
 
+
 //get user
 app.get('/api/get_user', async (req, res) => {
   try {
@@ -424,17 +429,22 @@ app.post("/api/create_user", async (req, res) => {
       [user_id, email, hashedPassword, code]
     );
 
-    // Formal email template
-    const subject = "Barangay Easy Docs - Account Verification Code";
-    const text = `Dear Resident,\n\nThank you for registering with Barangay Easy Docs. To complete your registration, please use the verification code below:\n\nVerification Code: ${code}\n\nThis code will expire in 10 minutes. If you did not request this, please ignore this email.\n\nBest regards,\nBarangay Easy Docs Support Team`;
-    
+    // Clear and readable email content
+    const subject = "Verify Your Barangay EasyDocs Account";
+    const text = `Hello,\n\nYour verification code is: ${code}\n\nPlease enter this code in the app to verify your account.\n\nIf you didn’t request this, please ignore this email.\n\nThank you,\nBarangay EasyDocs Team`;
+
     const html = `
-      <p>Dear Resident,</p>
-      <p>Thank you for registering with <strong>Barangay Easy Docs</strong>. To complete your registration, please use the verification code below:</p>
-      <h2 style="color: #007bff;">${code}</h2>
-      <p>This code will expire in <strong>10 minutes</strong>. If you did not request this, please ignore this email.</p>
-      <p>Best regards,<br><strong>Barangay Easy Docs Support Team</strong></p>
+      <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; max-width: 500px; margin: auto; border: 1px solid #ddd; border-radius: 8px;">
+        <h2 style="color: #2E86C1;">Barangay EasyDocs</h2>
+        <p style="font-size: 16px;">Hello,</p>
+        <p style="font-size: 18px;">Your verification code is:</p>
+        <h2 style="background: #f4f4f4; padding: 10px; border-radius: 5px; display: inline-block;">${code}</h2>
+        <p style="font-size: 16px;">Please enter this code in the app to verify your account.</p>
+        <p style="color: #888; font-size: 14px;">If you didn’t request this, please ignore this email.</p>
+        <p style="font-size: 16px;"><strong>Thank you,<br>Barangay EasyDocs Team</strong></p>
+      </div>
     `;
+
 
     // Send verification email
     await sendEmail(email, subject, text, html);
@@ -593,30 +603,56 @@ app.get("/user/verify_email/:email", async (req, res) => {
   }
 });
 
+app.post('/send-notification', async (req, res) => {
+  const { email, requestId, status } = req.body;
 
+  if (!email || !requestId || !status) {
+    return res.status(400).json({ error: 'Email, Request ID, and Status are required fields.' });
+  }
 
+  const subject = `Great news! Your request #${requestId} has been updated`;
+  const text = `Hello there!\n\nWe just wanted to let you know that your request (ID: ${requestId}) is now '${status}'.\n\nIf you need any help or have questions, feel free to reach out. We're happy to assist you!\n\nBest regards,\nYour Barangay Manogob Team`;
+  
+  const html = `
+    <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; max-width: 500px; margin: auto; border: 1px solid #ddd; border-radius: 8px;">
+      <h2 style="color: #2E86C1;">Barangay Man-Ogob</h2>
+      <p style="font-size: 16px;">Hello,</p>
+      <p style="font-size: 18px;">Your request status has been updated:</p>
+      <h2 style="background: #f4f4f4; padding: 10px; border-radius: 5px; display: inline-block;">${status}</h2>
+      <p style="font-size: 16px;">Transaction: <strong>${requestId}</strong></p>
+      <p style="font-size: 16px;">If you need any help or have questions, feel free to reach out. We're happy to assist you!</p>
+      <p style="color: #888; font-size: 14px;">Thank you for using Barangay Man-ogob services.</p>
+      <p style="font-size: 16px;"><strong>Best regards,<br>Barangay Man-ogob Team</strong></p>
+    </div>
+  `;
+
+  try {
+    await sendEmail(email, subject, text, html);
+    res.status(200).json({ message: 'Email notification has been successfully sent.' });
+  } catch (error) {
+    res.status(500).json({ error: 'An error occurred while sending the email notification.' });
+  }
+});
 
 
 
 // api for processing transaction of certificate
 app.post("/certificate_transaction", async (req, res) => {
-  const { resident_id, certificate_type, purpose, status, certificate_details } = req.body;
+  const { resident_id, certificate_type, status, certificate_details } = req.body;
   const encryptedCertificateType = encryptData(certificate_type);
-  const encryptedPurpose = encryptData(purpose);
-  const encryptedStatus = encryptData(status);
+
   
   // Convert JSON to string before encryption
   const encryptedCertificateDetails = encryptData(JSON.stringify(certificate_details)); 
 
   const sql = `INSERT INTO certificate_transaction (
-      resident_id, certificate_type, purpose, status, certificate_details
-    ) VALUES ($1, $2, $3, $4, $5) RETURNING transaction_id`;
+      resident_id, certificate_type, status, certificate_details
+    ) VALUES ($1, $2, $3, $4) RETURNING transaction_id`;
 
   const values = [
     resident_id, 
     encryptedCertificateType, 
-    encryptedPurpose, 
-    encryptedStatus, 
+    status,
     encryptedCertificateDetails // Store as text
   ];
 
@@ -633,8 +669,8 @@ app.post("/certificate_transaction", async (req, res) => {
 app.get("/api/get_transaction", async (req, res) => {
   try {
     // First SQL Query: Get all certificate transactions
-    const sql1 = `SELECT transaction_id, resident_id, certificate_type, purpose, status, date_requested, date_issued, certificate_details 
-                  FROM certificate_transaction`;
+    const sql1 = `SELECT transaction_id, resident_id, certificate_type,  status, date_requested, date_issued, certificate_details 
+                  FROM certificate_transaction ORDER BY transaction_id`;
     const result1 = await pool.query(sql1);
 
     // Check if transactions exist
@@ -647,8 +683,7 @@ app.get("/api/get_transaction", async (req, res) => {
       transaction_id: row.transaction_id,
       resident_id: row.resident_id,
       certificate_type: decryptData(row.certificate_type),
-      purpose: decryptData(row.purpose),
-      status: decryptData(row.status),
+      status: row.status,
       date_requested: row.date_requested,
       date_issued: row.date_issued,
       certificate_details: safeParseJSON(decryptData(row.certificate_details)), // Convert JSON safely
@@ -691,24 +726,21 @@ app.get("/api/get_transaction", async (req, res) => {
 app.get("/certificate_transaction/:resident_id", async (req, res) => {
   const { resident_id } = req.params;
 
-  const sql = `SELECT transaction_id, resident_id, certificate_type, purpose, status, date_requested, date_issued, certificate_details 
+  const sql = `SELECT transaction_id, resident_id, certificate_type,  status, date_requested, date_issued, certificate_details 
                FROM certificate_transaction 
                WHERE resident_id = $1`;
 
   try {
     const result = await pool.query(sql, [resident_id]);
 
-    if (result.rowCount === 0) {
-      return res.status(404).json({ message: "No transactions found for the given resident_id" });
-    }
+
 
     // Decrypt transaction data
     const decryptedTransactions = result.rows.map(row => ({
       transaction_id: row.transaction_id,
       resident_id: row.resident_id,
       certificate_type: decryptData(row.certificate_type),
-      purpose: decryptData(row.purpose),
-      status: decryptData(row.status),
+      status: row.status,
       date_requested: row.date_requested,
       date_issued: row.date_issued,
       certificate_details: JSON.parse(decryptData(row.certificate_details)), // Convert JSON safely
@@ -720,6 +752,25 @@ app.get("/certificate_transaction/:resident_id", async (req, res) => {
     res.status(500).json({ message: "Database error" });
   }
 });
+
+
+app.put("/certificate_transaction/:transaction_id", async (req, res) => {
+  const { status } = req.body;
+  const { transaction_id } = req.params;
+
+
+
+  const sql = `UPDATE certificate_transaction SET status = $1 WHERE transaction_id = $2`;
+
+  try {
+    await pool.query(sql, [status, transaction_id]);
+    res.status(200).json({ message: "Transaction status updated" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Database error" });
+  }
+});
+
 
 // Safe JSON parsing function
 function safeParseJSON(data) {
@@ -733,9 +784,62 @@ function safeParseJSON(data) {
 
 
 
+// get all current transaction
+app.get("/api/get_transaction_history", async (req, res) => {
+  try {
+    // First SQL Query: Get all certificate transactions
+    const sql1 = `SELECT transaction_id, resident_id, certificate_type,  status, date_requested, date_issued, certificate_details 
+                  FROM  certificate_transaction_history ORDER BY transaction_id DESC`;
+    const result1 = await pool.query(sql1);
 
+    // Check if transactions exist
+    if (result1.rowCount === 0) {
+      return res.status(200).json({ transactions: [] });
+    }
 
+    // Decrypt transaction data
+    const decryptedTransactions = result1.rows.map(row => ({
+      transaction_id: row.transaction_id,
+      resident_id: row.resident_id,
+      certificate_type: decryptData(row.certificate_type),
+      status: row.status,
+      date_requested: row.date_requested,
+      date_issued: row.date_issued,
+      certificate_details: safeParseJSON(decryptData(row.certificate_details)), // Convert JSON safely
+    }));
 
+    // Extract unique resident_ids from transactions
+    const residentIds = [...new Set(decryptedTransactions.map(t => t.resident_id))];
+
+    // Fetch resident details for all related resident_ids
+    let residentMap = {};
+    if (residentIds.length > 0) {
+      const sql2 = `SELECT user_id, email FROM user_info WHERE user_id = ANY($1)`;
+      const result2 = await pool.query(sql2, [residentIds]);
+
+      if (result2.rowCount > 0) {
+        // Create a map of resident_id to email
+        residentMap = result2.rows.reduce((map, row) => {
+          map[row.user_id] = row.email;
+          return map;
+        }, {});
+      }
+    }
+
+    // Merge resident email into transactions
+    const transactionsWithResidents = decryptedTransactions.map(transaction => ({
+      ...transaction,
+      resident_email: residentMap[transaction.resident_id] || null, // Add email or null if not found
+    }));
+
+    // Send Response
+    res.status(200).json({ transactions: transactionsWithResidents });
+
+  } catch (err) {
+    console.error("Database error:", err);
+    res.status(500).json({ message: "Database error" });
+  }
+});
 
 
 
@@ -744,24 +848,21 @@ function safeParseJSON(data) {
 app.get("/certificate_transaction_history/:resident_id", async (req, res) => {
   const { resident_id } = req.params;
 
-  const sql = `SELECT transaction_id, resident_id, certificate_type, purpose, status, date_requested, date_issued, certificate_details 
+  const sql = `SELECT transaction_id, resident_id, certificate_type,  status, date_requested, date_issued, certificate_details 
                FROM certificate_transaction_history
                WHERE resident_id = $1`;
 
   try {
     const result = await pool.query(sql, [resident_id]);
 
-    if (result.rowCount === 0) {
-      return res.status(404).json({ message: "No transactions found for the given resident_id" });
-    }
 
     // Decrypt transaction data
     const decryptedTransactions = result.rows.map(row => ({
       transaction_id: row.transaction_id,
       resident_id: row.resident_id,
       certificate_type: decryptData(row.certificate_type),
-      purpose: decryptData(row.purpose),
-      status: decryptData(row.status),
+    
+      status: row.status,
       date_requested: row.date_requested,
       date_issued: row.date_issued,
       certificate_details: JSON.parse(decryptData(row.certificate_details)), // Convert JSON safely
@@ -774,258 +875,84 @@ app.get("/certificate_transaction_history/:resident_id", async (req, res) => {
   }
 });
 
+const TEMPLATE_FIELDS = {
+  indigency: ["fullName", "age", "purok", "maritalStatus", "purpose"],
+  good_moral: ["fullName", "age", "purok", "maritalStatus", "purpose"],
+  clearance: ["name", "purpose", "date_issued"]
+};
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Fetch all book activities
-app.get('/api/booksToreturned', async (req, res) => {
-  try {
-    const result = await client.query("SELECT book_list.*, books_activity.* FROM books_activity INNER JOIN book_list ON books_activity.book_id = book_list.book_id WHERE action_type = 'Borrowed' AND status = 'Approved' OR status = 'Overdue'");
-    res.json(result.rows);
-  } catch (error) {
-    console.error(error);
-    res.status(500).send('Server Error');
-  }
-});
-
-
-
-//research api
-app.post("/api/research", async (req, res) => {
-  const { title, keyword,year, url } = req.body; // 'url' refers to the abstract_url
+app.post("/api/generate-certificate", (req, res) => {
+  const { templateName, ...data } = req.body;
 
   try {
-    // Using client to insert research data into the database
-    await client.query(
-      "INSERT INTO research_repository (title,keyword,year, abstract_url) VALUES ($1,$2, $3, $4)",
-      [title, keyword,year, url]
-    );
-
-    res.status(201).send("Research added");
-  } catch (error) {
-    console.error("Error adding research:", error);
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-app.delete("/api/research/:title", async (req, res) => {
-  const { title } = req.params;
-  try {
-    const result = await client.query("DELETE FROM research_repository WHERE id = $1", [title]);
-
-    if (result.rowCount === 0) {
-      return res.status(404).send("Book not found");
+    // Validate template name
+    if (!TEMPLATE_FIELDS[templateName]) {
+      return res.status(400).send("Invalid template name.");
     }
 
-    res.send("Book deleted");
-  } catch (error) {
-    console.error("Error deleting book:", error);
-    res.status(500).send("Internal Server Error");
-  }
-});
-
-app.get("/api/research", async (req, res) => {
-  try {
-    const result = await client.query("SELECT * FROM research_repository");
-    res.json(result.rows);
-  } catch (error) {
-    console.error("Error fetching books:", error);
-    res.status(500).send("Internal Server Error");
-  }
-});
-
-app.put("/api/research/:book_id", async (req, res) => {
-  const bookId = req.params.book_id; // Current book_id from params
-  const { title, keyword,year, pdf_url } = req.body; // Include the necessary fields in the request body
-
-  try {
-    // Update the book in the books table (including URL)
-    const result = await client.query(
-      "UPDATE research_repository SET title = $1, keyword = $2,year = $3, abstract_url = $4 WHERE id = $5",
-      [title, keyword,year, pdf_url, bookId] // Use bookId here
-    );
-
-    // Check if the book was found and updated
-    if (result.rowCount === 0) {
-      return res.status(404).send("Book not found");
+    // Validate required fields for the selected template
+    const requiredFields = TEMPLATE_FIELDS[templateName];
+    for (const field of requiredFields) {
+      if (!data[field]) {
+        return res.status(400).send(`Missing required field: ${field}`);
+      }
     }
 
-    // Send back a success message or the updated book information
-    res.send({ message: "Book updated successfully" });
-  } catch (error) {
-    console.error("Error updating book:", error);
-    res.status(500).send("Internal Server Error");
-  }
-});
+    // Get current date details
+    const date = new Date();
+    const day = date.getDate();
+    const month = date.toLocaleString("en-US", { month: "long" });
+    const year = date.getFullYear();
 
+    // Convert day number to ordinal (e.g., 1st, 2nd, 3rd)
+    const getOrdinal = (n) => {
+      if (n > 3 && n < 21) return `${n}th`; // Covers 11th-19th
+      switch (n % 10) {
+        case 1: return `${n}st`;
+        case 2: return `${n}nd`;
+        case 3: return `${n}rd`;
+        default: return `${n}th`;
+      }
+    };
 
-
-
-//books logs api
-app.get("/api/books_history", async (req, res) => {
-  try {
-    const result = await client.query("SELECT book_list.*, book_history.* FROM book_history INNER JOIN book_list ON book_history.book_id = book_list.book_id ORDER BY activity_id DESC");
-    res.json(result.rows);
-  } catch (error) {
-    console.error("Error fetching books:", error);
-    res.status(500).send("Internal Server Error");
-  }
-});
-app.delete("/api/books_history", async (req, res) => {
-  try {
-    // Delete all records from books_activity table
-    const result = await client.query("DELETE FROM book_history");
-
-    // If no rows are affected, send a message indicating no books were found
-    if (result.rowCount === 0) {
-      return res.status(404).send("No book activities found to delete");
+    // Add date fields to the data object for indigency templates
+    if (templateName === "indigency","good_moral") {
+      data.dayth = getOrdinal(day);
+      data.month = month;
+      data.year = year;
     }
 
-    res.send("All book activities deleted");
-  } catch (error) {
-    console.error("Error deleting all book activities:", error);
-    res.status(500).send("Internal Server Error");
-  }
-});
-
-
-
-//add digital copies
-app.post("/api/digital_copies", async (req, res) => {
-  const { title, author, year, url, stocks } = req.body;
-  try {
-    await client.query("INSERT INTO digital_lits (title, author, year, image_url, pdf_url) VALUES ($1, $2, $3, $4, $5)", [title, author, year, url, stocks]);
-    res.status(201).send("Book added");
-  } catch (error) {
-    console.error("Error adding book:", error);
-    res.status(500).send("Internal Server Error");
-  }
-});
-
-//get digital copies
-app.get("/api/digital_copies", async (req, res) => {
-  try {
-    const result = await client.query("SELECT * FROM digital_lits ORDER BY title");
-    res.json(result.rows);
-  } catch (error) {
-    console.error("Error fetching books:", error);
-    res.status(500).send("Internal Server Error");
-  }
-});
-
-//delete digital copies
-app.delete("/api/digital_copies/:id", async (req, res) => {
-  const { id } = req.params;
-  try {
-    const result = await client.query("DELETE FROM digital_lits WHERE book_id = $1", [id]);
-
-    if (result.rowCount === 0) {
-      return res.status(404).send("Book not found");
+    // Construct the template file path dynamically
+    const templatePath = path.join(__dirname, "templates", `${templateName}.docx`);
+    if (!fs.existsSync(templatePath)) {
+      return res.status(404).send("Template not found.");
     }
 
-    res.send("Book deleted");
+    // Load the DOCX template
+    const content = fs.readFileSync(templatePath, "binary");
+    const zip = new PizZip(content);
+    const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
+
+    // Render the template with dynamic data
+    doc.render(data);
+
+    // Generate the DOCX file as a buffer
+    const buffer = doc.getZip().generate({ type: "nodebuffer" });
+
+    // Set headers for file download
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    res.setHeader("Content-Disposition", `attachment; filename="${data.fullName || "certificate"}_${templateName}.docx"`);
+
+    // Send the file directly to the client
+    res.send(buffer);
   } catch (error) {
-    console.error("Error deleting book:", error);
-    res.status(500).send("Internal Server Error");
+    res.status(500).send("Error generating certificate: " + error.message);
   }
 });
-
-//
-app.post("/api/books", async (req, res) => {
-  const { title, author, year, url, stocks } = req.body;
-  try {
-    await client.query("INSERT INTO book_list (title, author, year, url, stocks) VALUES ($1, $2, $3, $4, $5)", [title, author, year, url, stocks]);
-    res.status(201).send("Book added");
-  } catch (error) {
-    console.error("Error adding book:", error);
-    res.status(500).send("Internal Server Error");
-  }
-});
-
-
-
-
-
-
-
-
-
-
-//insert students bulk
-app.post('/api/insert_students', async (req, res) => {
-  const students = req.body.students; // Assume 'students' is an array of student objects
-  const Enrolled_status = true;
-
-  try {
-    const values = students.map((student) => {
-      const { email, First_Name, Last_Name } = student;
-      const password = crypto.randomBytes(8).toString('hex');
-      return [email, First_Name, Last_Name, password, Enrolled_status];
-    });
-
-    const query = `
-      INSERT INTO students (email, first_name, last_name, password, enrolled) 
-      VALUES ${values.map((_, i) => `($${i * 5 + 1}, $${i * 5 + 2}, $${i * 5 + 3}, $${i * 5 + 4}, $${i * 5 + 5})`).join(', ')}
-    `;
-
-    const flattenedValues = values.flat();
-    await client.query(query, flattenedValues);
-
- // Send an email to each student with their login credentials
-for (const [email, firstName, lastName, password] of values) {
-  const subject = 'Your Account for MC Salik-Sik Library System';
-  const html = `
-    <p>Dear ${firstName} ${lastName},</p>
-    <p>Your account has been created successfully. You can now log in using the following credentials:</p>
-    <p><strong>Email:</strong> ${email}<br><strong>Password:</strong> ${password}</p>
-    <p>Please keep this information secure.</p>
-    <p><a href="https://fastupload.io/9f054b51a2992bf3" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Download MC Salik-Sik</a></p>
-    <p>Best regards,<br>MC Salik-Sik Library System Team</p>
-  `;
-
-  await sendEmail(email, subject,null, html);
-}
-
-    res.status(201).send('Students added and emails sent successfully');
-  } catch (error) {
-    console.error('Error adding students:', error);
-    res.status(500).send('Internal Server Error');
-  }
-});
-
 
 
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
+
