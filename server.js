@@ -412,6 +412,25 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
+app.post("/api/check-email", async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    // Check if the email exists in the database
+    const result = await client.query("SELECT user_id FROM user_info WHERE email = $1", [email]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Email not found" });
+    }
+
+    res.json({ message: "Email exists" });
+  } catch (error) {
+    console.error("Email check error:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+
 
 // Add a new user with password encryption and email verification
 app.post("/api/create_user", async (req, res) => {
@@ -491,6 +510,39 @@ app.put("/user/update_verification", async (req, res) => {
   }
 });
 
+app.put("/user/update_password", async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ message: "Email and password are required" });
+  }
+
+  try {
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+    const sql = `UPDATE user_info 
+                 SET password = $1 
+                 WHERE email = $2 
+                 RETURNING email`;
+
+    const result = await pool.query(sql, [hashedPassword, email]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: "Email not found" });
+    }
+
+    res.status(200).json({ 
+      message: "Password updated successfully", 
+      email: result.rows[0].email,
+      verified: result.rows[0].verified // Ensure this column exists in your DB
+    });
+
+  } catch (err) {
+    console.error("Database error:", err);
+    res.status(500).json({ message: "Database error" });
+  }
+});
 
 // API to update verification code and send a verification email
 app.put("/user/update_code", async (req, res) => {
@@ -755,15 +807,13 @@ app.get("/certificate_transaction/:resident_id", async (req, res) => {
 
 
 app.put("/certificate_transaction/:transaction_id", async (req, res) => {
-  const { status } = req.body;
+  const { status, date_issued } = req.body;
   const { transaction_id } = req.params;
 
-
-
-  const sql = `UPDATE certificate_transaction SET status = $1 WHERE transaction_id = $2`;
+  const sql = `UPDATE certificate_transaction SET status = $1, date_issued = $2 WHERE transaction_id = $3`;
 
   try {
-    await pool.query(sql, [status, transaction_id]);
+    await pool.query(sql, [status, date_issued, transaction_id]);
     res.status(200).json({ message: "Transaction status updated" });
   } catch (err) {
     console.error(err);
@@ -787,62 +837,60 @@ function safeParseJSON(data) {
 // get all current transaction
 app.get("/api/get_transaction_history", async (req, res) => {
   try {
-    // First SQL Query: Get all certificate transactions
-    const sql1 = `SELECT transaction_id, resident_id, certificate_type,  status, date_requested, date_issued, certificate_details 
-                  FROM  certificate_transaction_history ORDER BY transaction_id DESC`;
-    const result1 = await pool.query(sql1);
+    // Optimized SQL Query: Fetch transaction history & join with user email
+    const sql = `
+      SELECT 
+        cth.transaction_id, 
+        cth.resident_id, 
+        cth.certificate_type, 
+        cth.status, 
+        cth.date_requested, 
+        cth.date_issued, 
+        cth.certificate_details, 
+        ui.email AS resident_email
+      FROM certificate_transaction_history cth
+      LEFT JOIN user_info ui ON cth.resident_id = ui.user_id
+      ORDER BY cth.transaction_id DESC
+    `;
 
-    // Check if transactions exist
-    if (result1.rowCount === 0) {
+    const result = await pool.query(sql);
+
+    if (result.rowCount === 0) {
       return res.status(200).json({ transactions: [] });
     }
 
     // Decrypt transaction data
-    const decryptedTransactions = result1.rows.map(row => ({
+    const transactions = result.rows.map(row => ({
       transaction_id: row.transaction_id,
       resident_id: row.resident_id,
       certificate_type: decryptData(row.certificate_type),
       status: row.status,
       date_requested: row.date_requested,
       date_issued: row.date_issued,
-      certificate_details: safeParseJSON(decryptData(row.certificate_details)), // Convert JSON safely
-    }));
-
-    // Extract unique resident_ids from transactions
-    const residentIds = [...new Set(decryptedTransactions.map(t => t.resident_id))];
-
-    // Fetch resident details for all related resident_ids
-    let residentMap = {};
-    if (residentIds.length > 0) {
-      const sql2 = `SELECT user_id, email FROM user_info WHERE user_id = ANY($1)`;
-      const result2 = await pool.query(sql2, [residentIds]);
-
-      if (result2.rowCount > 0) {
-        // Create a map of resident_id to email
-        residentMap = result2.rows.reduce((map, row) => {
-          map[row.user_id] = row.email;
-          return map;
-        }, {});
-      }
-    }
-
-    // Merge resident email into transactions
-    const transactionsWithResidents = decryptedTransactions.map(transaction => ({
-      ...transaction,
-      resident_email: residentMap[transaction.resident_id] || null, // Add email or null if not found
+      certificate_details: safeParseJSON(decryptData(row.certificate_details)), // Safe JSON parse
+      resident_email: row.resident_email || null, // Ensure null if email not found
     }));
 
     // Send Response
-    res.status(200).json({ transactions: transactionsWithResidents });
+    res.status(200).json({ transactions });
 
   } catch (err) {
-    console.error("Database error:", err);
-    res.status(500).json({ message: "Database error" });
+    console.error("Database error:", err.message);
+    res.status(500).json({ message: "Database error", error: err.message });
   }
 });
 
 
 
+app.delete("/api/delete_transactions_history", async (req, res) => {
+  try {
+    await client.query("DELETE FROM certificate_transaction_history");
+    res.send("History deleted");
+  } catch (error) {
+    console.error("Error deleting history:", error);
+    res.status(500).send("Internal Server Error");
+  }
+});
 
 // Retrieve transactions by resident_id
 app.get("/certificate_transaction_history/:resident_id", async (req, res) => {
@@ -856,7 +904,7 @@ app.get("/certificate_transaction_history/:resident_id", async (req, res) => {
     const result = await pool.query(sql, [resident_id]);
 
 
-    // Decrypt transaction data
+  
     const decryptedTransactions = result.rows.map(row => ({
       transaction_id: row.transaction_id,
       resident_id: row.resident_id,
