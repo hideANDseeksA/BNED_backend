@@ -105,6 +105,20 @@ app.post("/api/create_residents", async (req, res) => {
   }
 });
 
+// const allowedOrigins = ["http://localhost:3002"];
+
+// app.use(cors({
+//   origin: function (origin, callback) {
+//     if (!origin || allowedOrigins.includes(origin)) {
+//       callback(null, true);
+//     } else {
+//       callback(new Error("Not allowed by CORS"));
+//     }
+//   },
+//   methods: ["GET", "POST", "PUT", "DELETE"],
+//   credentials: true
+// }));
+
 // ✅ Single Insert Resident with Encryption
 app.post("/api/create_resident", async (req, res) => {
   const resident = req.body;
@@ -119,7 +133,7 @@ app.post("/api/create_resident", async (req, res) => {
       (first_name, middle_name, last_name, extension_name, age, address, sex, status, birthplace, birthday) 
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     `;
-    
+
     const values = [
       encryptData(resident.first_name),
       encryptData(resident.middle_name),
@@ -240,33 +254,33 @@ app.get("/api/get_resident", async (req, res) => {
       first_name: decryptData(row.first_name),
       middle_name: decryptData(row.middle_name),
       last_name: decryptData(row.last_name),
-      extension_name:row.extension_name,
+      extension_name: row.extension_name,
       age: row.age,
       address: decryptData(row.address),
       sex: row.sex,
       status: decryptData(row.status),
       birthplace: decryptData(row.birthplace),
-      birthday: row.birthday instanceof Date 
+      birthday: row.birthday instanceof Date
         ? new Date(row.birthday.getTime() - row.birthday.getTimezoneOffset() * 60000) // Convert to UTC
-            .toISOString()
-            .split("T")[0]  // Keep YYYY-MM-DD format
+          .toISOString()
+          .split("T")[0]  // Keep YYYY-MM-DD format
         : row.birthday,
-        date_added: row.date_added 
+      date_added: row.date_added
         ? new Date(row.date_added).toLocaleString("en-US", {
-            timeZone: "Asia/Manila", // ✅ Force Philippine Time (UTC+8)
-            year: "numeric",
-            month: "2-digit",
-            day: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-            hour12: true, // ✅ 12-hour format with AM/PM
-          }).replace(",", "") // Remove the comma between date and time
+          timeZone: "Asia/Manila", // ✅ Force Philippine Time (UTC+8)
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: true, // ✅ 12-hour format with AM/PM
+        }).replace(",", "") // Remove the comma between date and time
         : null,
-   
+
     }));
-    
-    
+
+
     res.status(200).json(decryptedData);
   } catch (error) {
     console.error("Error fetching residents:", error);
@@ -316,20 +330,20 @@ app.get("/api/get_resident/:resident_id", async (req, res) => {
       birthplace: decryptData(row.birthplace),
       birthday: row.birthday instanceof Date
         ? new Date(row.birthday.getTime() - row.birthday.getTimezoneOffset() * 60000)
-            .toISOString()
-            .split("T")[0]
+          .toISOString()
+          .split("T")[0]
         : row.birthday,
       date_added: row.date_added
         ? new Date(row.date_added).toLocaleString("en-US", {
-            timeZone: "Asia/Manila",
-            year: "numeric",
-            month: "2-digit",
-            day: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-            hour12: true,
-          }).replace(",", "")
+          timeZone: "Asia/Manila",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: true,
+        }).replace(",", "")
         : null,
     };
 
@@ -346,16 +360,16 @@ app.get("/api/get_resident/:resident_id", async (req, res) => {
 //email set_up
 
 const transporter = nodemailer.createTransport({
-  service: 'Gmail', 
+  service: 'Gmail',
   auth: {
-    user: 'baranggay.manogob.easy.docs@gmail.com',
-    pass: 'rbfhdjzdebncbppy',
+    user: process.env.EMAIL_USER, // Load from environment variables
+    pass: process.env.EMAIL_PASS, // Load from environment variables
   },
 });
 // Function to send email
-const sendEmail = async (to, subject, text,html) => {
+const sendEmail = async (to, subject, text, html) => {
   const mailOptions = {
-    from: 'baranggay.manogob.easy.docs@gmail.com', // Update this to the sender email
+    from: `"Easy Docs" <${process.env.EMAIL_USER}>`,
     to: to,
     subject: subject,
     text: text,
@@ -376,7 +390,7 @@ const sendEmail = async (to, subject, text,html) => {
 app.get('/api/get_user', async (req, res) => {
   try {
     const result = await client.query('SELECT email,user_id FROM user_info');
-    res.json(result.rows);                                                         
+    res.json(result.rows);
   } catch (error) {
     console.error("Error fetching students:", error);
     res.status(500).json({ error: 'Failed to fetch students', details: error.message });
@@ -432,50 +446,67 @@ app.post("/api/check-email", async (req, res) => {
 
 
 
-// Add a new user with password encryption and email verification
 app.post("/api/create_user", async (req, res) => {
-  const { user_id, email, password,code } = req.body;
+  const { user_id, email, password, code } = req.body;
 
   try {
+    // ✅ Check if email already exists
+    const emailCheck = await client.query("SELECT email FROM user_info WHERE email = $1", [email]);
+    if (emailCheck.rowCount > 0) {
+      return res.status(400).json({ message: "❌ Email already exists. Please use a different email." });
+    }
 
-    // Hash the password
+    // ✅ Check if user_id exists in resident_information (FIXED QUERY)
+    const userIdCheck = await client.query("SELECT resident_id FROM resident_information WHERE resident_id = $1", [user_id]);
+    if (userIdCheck.rowCount === 0) {
+      return res.status(400).json({ message: "❌ Resident ID does not exist. Please register in the admin" });
+    }
+
+    // ✅ Hash the password
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // Insert user into the database
+    // ✅ Insert user into the database
     await client.query(
       "INSERT INTO user_info (user_id, email, password, code) VALUES ($1, $2, $3, $4)",
       [user_id, email, hashedPassword, code]
     );
 
-    // Clear and readable email content
-    const subject = "Verify Your Barangay EasyDocs Account";
-    const text = `Hello,\n\nYour verification code is: ${code}\n\nPlease enter this code in the app to verify your account.\n\nIf you didn’t request this, please ignore this email.\n\nThank you,\nBarangay EasyDocs Team`;
+    // ✅ Prepare verification email
+    const subject = "Verify Your Barangay Easy Docs Account";
+    const text = `Hello, Our Beloved Residents \n\nYour verification code is: ${code}\n\nPlease enter this code in the app to verify your account.\n\nIf you didn’t request this, please ignore this email.\n\nThank you,\nBarangay EasyDocs Team`;
 
     const html = `
       <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; max-width: 500px; margin: auto; border: 1px solid #ddd; border-radius: 8px;">
         <h2 style="color: #2E86C1;">Barangay EasyDocs</h2>
-        <p style="font-size: 16px;">Hello,</p>
+        <p style="font-size: 16px;">Hello, Our Belove Resident</p>
         <p style="font-size: 18px;">Your verification code is:</p>
         <h2 style="background: #f4f4f4; padding: 10px; border-radius: 5px; display: inline-block;">${code}</h2>
         <p style="font-size: 16px;">Please enter this code in the app to verify your account.</p>
         <p style="color: #888; font-size: 14px;">If you didn’t request this, please ignore this email.</p>
-        <p style="font-size: 16px;"><strong>Thank you,<br>Barangay EasyDocs Team</strong></p>
+        <p style="font-size: 16px;"><strong>Thank you,<br>Barangay Easy Docs Team</strong></p>
       </div>
     `;
 
-
-    // Send verification email
+    // ✅ Send verification email
     await sendEmail(email, subject, text, html);
 
     res.status(201).json({
-      message: "User added successfully. Verification code sent.",
+      message: "✅ Account Created Succesfully!",
     });
+
   } catch (error) {
     console.error("❌ Error adding user:", error);
+
+    // ✅ Return proper error message instead of generic "Internal Server Error"
+    if (error.code === "23505") {
+      return res.status(400).json({ message: "❌ Duplicate entry. Email or User ID already exists." });
+    }
+
     res.status(500).json({ message: "Internal Server Error" });
   }
 });
+
 
 //api to update verification status
 app.put("/user/update_verification", async (req, res) => {
@@ -498,8 +529,8 @@ app.put("/user/update_verification", async (req, res) => {
       return res.status(404).json({ message: "Email not found" });
     }
 
-    res.status(200).json({ 
-      message: "Verification status updated successfully", 
+    res.status(200).json({
+      message: "Verification status updated successfully",
       email: result.rows[0].email,
       verified: result.rows[0].verified
     });
@@ -532,8 +563,8 @@ app.put("/user/update_password", async (req, res) => {
       return res.status(404).json({ message: "Email not found" });
     }
 
-    res.status(200).json({ 
-      message: "Password updated successfully", 
+    res.status(200).json({
+      message: "Password updated successfully",
       email: result.rows[0].email,
       verified: result.rows[0].verified // Ensure this column exists in your DB
     });
@@ -583,8 +614,8 @@ app.put("/user/update_code", async (req, res) => {
 
     await sendEmail(email, emailSubject, emailText, emailHtml);
 
-    res.status(200).json({ 
-      message: "Verification code updated and email sent successfully", 
+    res.status(200).json({
+      message: "Verification code updated and email sent successfully",
       email: result.rows[0].email,
       code: result.rows[0].code
     });
@@ -629,22 +660,22 @@ app.get("/user/verify_email/:email", async (req, res) => {
         sex: user.sex,
         status: decryptData(user.status),
         birthplace: decryptData(user.birthplace),
-        birthday: user.birthday instanceof Date 
+        birthday: user.birthday instanceof Date
           ? new Date(user.birthday.getTime() - user.birthday.getTimezoneOffset() * 60000)
-              .toISOString()
-              .split("T")[0]
+            .toISOString()
+            .split("T")[0]
           : user.birthday,
-        date_added: user.date_added 
+        date_added: user.date_added
           ? new Date(user.date_added).toLocaleString("en-US", {
-              timeZone: "Asia/Manila",
-              year: "numeric",
-              month: "2-digit",
-              day: "2-digit",
-              hour: "2-digit",
-              minute: "2-digit",
-              second: "2-digit",
-              hour12: true,
-            }).replace(",", "")
+            timeZone: "Asia/Manila",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: true,
+          }).replace(",", "")
           : null,
       },
     });
@@ -656,7 +687,7 @@ app.get("/user/verify_email/:email", async (req, res) => {
 });
 
 app.post('/send-notification', async (req, res) => {
-  const { email, requestId, status } = req.body;
+  const { email, requestId, status,message } = req.body;
 
   if (!email || !requestId || !status) {
     return res.status(400).json({ error: 'Email, Request ID, and Status are required fields.' });
@@ -664,18 +695,36 @@ app.post('/send-notification', async (req, res) => {
 
   const subject = `Great news! Your request #${requestId} has been updated`;
   const text = `Hello there!\n\nWe just wanted to let you know that your request (ID: ${requestId}) is now '${status}'.\n\nIf you need any help or have questions, feel free to reach out. We're happy to assist you!\n\nBest regards,\nYour Barangay Manogob Team`;
-  
+
   const html = `
-    <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; max-width: 500px; margin: auto; border: 1px solid #ddd; border-radius: 8px;">
-      <h2 style="color: #2E86C1;">Barangay Man-Ogob</h2>
-      <p style="font-size: 16px;">Hello,</p>
-      <p style="font-size: 18px;">Your request status has been updated:</p>
-      <h2 style="background: #f4f4f4; padding: 10px; border-radius: 5px; display: inline-block;">${status}</h2>
-      <p style="font-size: 16px;">Transaction: <strong>${requestId}</strong></p>
-      <p style="font-size: 16px;">If you need any help or have questions, feel free to reach out. We're happy to assist you!</p>
-      <p style="color: #888; font-size: 14px;">Thank you for using Barangay Man-ogob services.</p>
-      <p style="font-size: 16px;"><strong>Best regards,<br>Barangay Man-ogob Team</strong></p>
+   
+<div style="display: flex; justify-content: center; align-items: center;">
+<img src="https://womlhdbniiweqaeevwll.supabase.co/storage/v1/object/public/images/header.png" 
+     alt="Header Image" 
+     style="margin-top: 20px; width: 100%; max-width: 500px; height: 250px; border-radius: 5px;">
+
+</div>   
+
+<div style="font-family: Arial, sans-serif; padding: 20px; max-width: 500px; margin: auto; border: 1px solid #ddd; border-radius: 8px; overflow: hidden;">
+    
+    <!-- Main Content -->
+    <div style="padding: 20px;">
+        <h3 style="color: #2E86C1; text-align: center;">Barangay Easy Docs Request Update</h3>
+        <p style="font-size: 12px; margin-bottom: 20px;">Hello, Our Beloved Residents</p>
+        <p style="font-size: 12px;">${message}/p>
+        <p style="font-size: 12px;">Transaction ID: <strong>${requestId}</strong></p>
+        <hr style="border: 0; height: 1px; background: #ddd; margin: 20px 0;">
+        <p style="font-size: 12px;">If you need any help or have questions, feel free to reach out. We're happy to assist you!</p>
     </div>
+    <!-- Blue Footer -->
+    <div style="background-color: #2E86C1; color: white; padding: 15px; text-align: center; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;">
+        <p style="font-size: 12px;">Thank you for using Barangay Easy Docs services.</p>
+        <p style="font-size: 12px;"><strong>Best regards,<br>Barangay Easy Docs Team</strong></p>
+    </div>
+
+</div>
+
+
   `;
 
   try {
@@ -693,17 +742,17 @@ app.post("/certificate_transaction", async (req, res) => {
   const { resident_id, certificate_type, status, certificate_details } = req.body;
   const encryptedCertificateType = encryptData(certificate_type);
 
-  
+
   // Convert JSON to string before encryption
-  const encryptedCertificateDetails = encryptData(JSON.stringify(certificate_details)); 
+  const encryptedCertificateDetails = encryptData(JSON.stringify(certificate_details));
 
   const sql = `INSERT INTO certificate_transaction (
       resident_id, certificate_type, status, certificate_details
     ) VALUES ($1, $2, $3, $4) RETURNING transaction_id`;
 
   const values = [
-    resident_id, 
-    encryptedCertificateType, 
+    resident_id,
+    encryptedCertificateType,
     status,
     encryptedCertificateDetails // Store as text
   ];
@@ -904,12 +953,12 @@ app.get("/certificate_transaction_history/:resident_id", async (req, res) => {
     const result = await pool.query(sql, [resident_id]);
 
 
-  
+
     const decryptedTransactions = result.rows.map(row => ({
       transaction_id: row.transaction_id,
       resident_id: row.resident_id,
       certificate_type: decryptData(row.certificate_type),
-    
+
       status: row.status,
       date_requested: row.date_requested,
       date_issued: row.date_issued,
@@ -964,7 +1013,7 @@ app.post("/api/generate-certificate", (req, res) => {
     };
 
     // Add date fields to the data object for indigency templates
-    if (templateName === "indigency","good_moral") {
+    if (templateName === "indigency", "good_moral") {
       data.dayth = getOrdinal(day);
       data.month = month;
       data.year = year;
