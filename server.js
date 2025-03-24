@@ -689,7 +689,7 @@ app.get("/user/verify_email/:email", async (req, res) => {
 app.post('/send-notification', async (req, res) => {
   const { email, requestId, status,message } = req.body;
 
-  if (!email || !requestId || !status) {
+  if (!email || !requestId || !status || !message) {
     return res.status(400).json({ error: 'Email, Request ID, and Status are required fields.' });
   }
 
@@ -711,7 +711,7 @@ app.post('/send-notification', async (req, res) => {
     <div style="padding: 20px;">
         <h3 style="color: #2E86C1; text-align: center;">Barangay Easy Docs Request Update</h3>
         <p style="font-size: 12px; margin-bottom: 20px;">Hello, Our Beloved Residents</p>
-        <p style="font-size: 12px;">${message}/p>
+        <p style="font-size: 12px;">${message} </p>
         <p style="font-size: 12px;">Transaction ID: <strong>${requestId}</strong></p>
         <hr style="border: 0; height: 1px; background: #ddd; margin: 20px 0;">
         <p style="font-size: 12px;">If you need any help or have questions, feel free to reach out. We're happy to assist you!</p>
@@ -734,6 +734,78 @@ app.post('/send-notification', async (req, res) => {
     res.status(500).json({ error: 'An error occurred while sending the email notification.' });
   }
 });
+
+
+// API Endpoint to Fetch Transaction History
+app.get('/api/transaction-history', async (req, res) => {
+  try {
+      const query = `
+          SELECT 
+              EXTRACT(YEAR FROM date_requested AT TIME ZONE 'Asia/Manila') AS year_local,
+              EXTRACT(MONTH FROM date_requested AT TIME ZONE 'Asia/Manila') AS month,
+              EXTRACT(WEEK FROM date_requested AT TIME ZONE 'Asia/Manila') AS week,
+              COUNT(*) AS total_requests,
+              SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) AS completed,
+              SUM(CASE WHEN status = 'Cancelled' THEN 1 ELSE 0 END) AS cancelled,
+              SUM(CASE WHEN status = 'Reject' THEN 1 ELSE 0 END) AS rejected
+          FROM certificate_transaction_history
+          GROUP BY GROUPING SETS (
+              (EXTRACT(YEAR FROM date_requested AT TIME ZONE 'Asia/Manila')),  -- Yearly
+              (EXTRACT(YEAR FROM date_requested AT TIME ZONE 'Asia/Manila'), EXTRACT(MONTH FROM date_requested AT TIME ZONE 'Asia/Manila')), -- Monthly
+              (EXTRACT(YEAR FROM date_requested AT TIME ZONE 'Asia/Manila'), EXTRACT(WEEK FROM date_requested AT TIME ZONE 'Asia/Manila'))   -- Weekly
+          )
+          ORDER BY year_local, month, week;
+      `;
+
+      const { rows } = await pool.query(query);
+
+      // Structured Data
+      const yearlyData = [];
+      const monthlyData = [];
+      const weeklyData = [];
+
+      rows.forEach((row) => {
+          if (row.year_local !== null && row.month === null && row.week === null) {
+              // Yearly Data
+              yearlyData.push({
+                  year: row.year_local.toString(),
+                  total_requests: row.total_requests,
+                  completed: row.completed,
+                  cancelled: row.cancelled,
+                  rejected: row.rejected
+              });
+          } else if (row.year_local !== null && row.month !== null && row.week === null) {
+              // Monthly Data
+              const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+              monthlyData.push({
+                  year: row.year_local.toString(),
+                  month: monthNames[row.month - 1], // Convert month number to name
+                  total_requests: row.total_requests,
+                  completed: row.completed,
+                  cancelled: row.cancelled,
+                  rejected: row.rejected
+              });
+          } else if (row.year_local !== null && row.week !== null && row.month === null) {
+              // Weekly Data
+              weeklyData.push({
+                  year: row.year_local.toString(),
+                  week: `Week ${row.week}`,
+                  total_requests: row.total_requests,
+                  completed: row.completed,
+                  cancelled: row.cancelled,
+                  rejected: row.rejected
+              });
+          }
+      });
+
+      res.json({ yearlyData, monthlyData, weeklyData });
+
+  } catch (error) {
+      console.error('Error fetching transaction history:', error);
+      res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 
 
 
